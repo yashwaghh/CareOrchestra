@@ -31,10 +31,10 @@ jobs:
       - name: Build and Push Docker
         env:
           PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-          IMAGE: us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/care-orchestra/care-orchestra
         run: |
-          docker build -t $IMAGE .
-          docker push $IMAGE
+          # We use the full path directly to avoid newline errors
+          docker build -t us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/care-orchestra/care-orchestra:latest .
+          docker push us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/care-orchestra/care-orchestra:latest
 
       - name: Deploy to Cloud Run
         env:
@@ -42,7 +42,7 @@ jobs:
           GEMINI_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           gcloud run deploy care-orchestra \
-            --image us-central1-docker.pkg.dev/$PROJECT_ID/care-orchestra/care-orchestra \
+            --image us-central1-docker.pkg.dev/$PROJECT_ID/care-orchestra/care-orchestra:latest \
             --region us-central1 \
             --platform managed \
             --allow-unauthenticated \
