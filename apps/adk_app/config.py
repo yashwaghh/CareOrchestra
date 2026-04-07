@@ -28,6 +28,10 @@ class CalendarConfig:
     """Google Calendar integration configuration."""
     calendar_id: str = os.getenv("CALENDAR_ID", "primary")
     use_mock: bool = os.getenv("CALENDAR_USE_MOCK", "true").lower() == "true"
+    # Path to a service-account JSON file, or a raw JSON string of the credentials.
+    # When set, the scheduler will use this instead of Application Default Credentials.
+    credentials_file: Optional[str] = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    credentials_json: Optional[str] = os.getenv("GOOGLE_CREDENTIALS_JSON")
 
 
 @dataclass
