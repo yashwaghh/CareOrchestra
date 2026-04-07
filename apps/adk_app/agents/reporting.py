@@ -84,7 +84,7 @@ class ReportingAgent:
         rate = adherence.get("adherence_rate")
         if rate is not None:
             lines.append(
-                f"  Adherence rate : {rate}%  ({adherence.get('risk_level', 'N/A')} risk)"
+                f"  Adherence rate : {rate}%  ({adherence.get('adherence_risk', 'N/A')} risk)"
             )
             lines.append(
                 f"  Doses taken    : {adherence.get('total_taken', 0)} / "
@@ -327,7 +327,7 @@ class ReportingAgent:
                 "total_scheduled": total,
                 "total_taken": taken,
                 "total_missed": total - taken,
-                "risk_level": risk,
+                "adherence_risk": risk,
             }
         except Exception as e:
             logger.error(f"Error fetching adherence: {e}")

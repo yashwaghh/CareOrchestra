@@ -304,4 +304,5 @@ root_agent = Agent(
     name="symptoms_agent",
     description="CareOrchestra Symptoms Agent - Clinical risk assessment",
     instruction="Call assess_symptoms with patient details to get clinical assessment.",
+    tools=[assess_symptoms],
 )

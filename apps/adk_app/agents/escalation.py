@@ -6,6 +6,7 @@ import os
 
 from ..tools.bigquery_tools.client import BigQueryClient
 from ..tools.gmail_tools.alert_sender import GmailSender
+from .reporting import ReportingAgent
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +66,10 @@ class EscalationAgent:
 
         alert_content = self._format_alert(patient_id, risk_level, alert_summary)
 
+        # Pass a clearly-labelled identifier so the email subject reads
+        # "Patient <id>" rather than a bare UUID.
         success = await self.send_alert_to_doctor(
-            contacts[0], patient_id, alert_content
+            contacts[0], f"Patient {patient_id}", alert_content
         )
 
         status = "sent" if success else "failed"
@@ -78,6 +81,27 @@ class EscalationAgent:
         # Persist escalation event to BigQuery for audit trail
         logged = await self._log_escalation(patient_id, risk_level, alert_content, contacts)
 
+        # Generate and deliver a doctor summary report after a successful alert
+        report_status = "skipped"
+        if success:
+            try:
+                reporting_agent = ReportingAgent()
+                report = await reporting_agent.generate_doctor_summary(
+                    patient_id=patient_id,
+                    analysis=alert_summary,
+                )
+                report_delivered = await self.gmail.send_report(
+                    contacts[0], "doctor_summary", report
+                )
+                report_status = "sent" if report_delivered else "send_failed"
+                logger.info(
+                    f"[Escalation] Doctor summary report "
+                    f"patient=***{masked_id} status={report_status}"
+                )
+            except Exception as exc:
+                logger.error(f"[Escalation] Failed to generate/send doctor summary: {exc}")
+                report_status = "error"
+
         return {
             "escalation_status": status,
             "patient_id": patient_id,
@@ -86,6 +110,7 @@ class EscalationAgent:
             "escalated_at": escalated_at,
             "alert_preview": alert_content[:200],
             "logged": logged,
+            "report_status": report_status,
         }
 
     async def send_alert_to_doctor(
