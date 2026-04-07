@@ -183,6 +183,9 @@ class ReportingAgent:
             Dict with 'patient_id', 'period_days', 'generated_at', and per-vital
             trend summaries (min, max, average, trend direction).
         """
+        # BigQuery INTERVAL does not support @param syntax, so `days` is
+        # interpolated.  We enforce int type here to prevent injection.
+        days = max(1, int(days))
         try:
             query = f"""
             SELECT vital_type, value, measured_at
@@ -274,6 +277,8 @@ class ReportingAgent:
 
     async def _fetch_latest_vitals(self, patient_id: str, days: int) -> dict:
         """Return the most recent reading per vital type within the last N days."""
+        # BigQuery INTERVAL does not support @param syntax; int() enforces type.
+        days = max(1, int(days))
         try:
             query = f"""
             SELECT vital_type, value, unit, measured_at
@@ -300,6 +305,8 @@ class ReportingAgent:
 
     async def _fetch_adherence(self, patient_id: str, days: int) -> dict:
         """Return adherence summary for the last N days."""
+        # BigQuery INTERVAL does not support @param syntax; int() enforces type.
+        days = max(1, int(days))
         try:
             query = f"""
             SELECT taken
@@ -328,6 +335,8 @@ class ReportingAgent:
 
     async def _fetch_recent_alerts(self, patient_id: str, days: int) -> list:
         """Return open alerts from the last N days."""
+        # BigQuery INTERVAL does not support @param syntax; int() enforces type.
+        days = max(1, int(days))
         try:
             query = f"""
             SELECT alert_type, severity, title, description, created_at, acknowledged

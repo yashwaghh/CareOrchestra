@@ -71,7 +71,7 @@ class EscalationAgent:
             if success:
                 notified.append(email)
                 logger.info(
-                    f"[Escalation] Alert sent to {name} <{email}> "
+                    f"[Escalation] Alert sent to {name} "
                     f"for patient=***{patient_id[-4:]} risk={risk_level}"
                 )
 
