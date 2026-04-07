@@ -333,14 +333,22 @@ class AnalysisAgent:
         """Convert a flat vitals dict into a list of finding dicts."""
         findings: list[dict] = []
 
-        hr = vitals_data.get("heart_rate") or vitals_data.get("hr")
-        spo2 = vitals_data.get("spo2") or vitals_data.get("oxygen_saturation")
-        sbp = (
-            vitals_data.get("sbp")
-            or vitals_data.get("systolic")
-            or vitals_data.get("bp_systolic")
+        hr = (
+            vitals_data["heart_rate"] if vitals_data.get("heart_rate") is not None
+            else vitals_data.get("hr")
         )
-        glucose = vitals_data.get("glucose") or vitals_data.get("blood_glucose")
+        spo2 = (
+            vitals_data["spo2"] if vitals_data.get("spo2") is not None
+            else vitals_data.get("oxygen_saturation")
+        )
+        sbp = next(
+            (vitals_data[k] for k in ("sbp", "systolic", "bp_systolic") if vitals_data.get(k) is not None),
+            None,
+        )
+        glucose = (
+            vitals_data["glucose"] if vitals_data.get("glucose") is not None
+            else vitals_data.get("blood_glucose")
+        )
 
         if hr is not None:
             if hr > 150:

@@ -62,9 +62,9 @@ class EscalationAgent:
         )
 
         status = "sent" if success else "failed"
+        masked_id = patient_id[-4:] if len(patient_id) >= 4 else patient_id
         logger.info(
-            f"[Escalation] patient=***{patient_id[-4:]} risk={risk_level} "
-            f"status={status} contact={contacts[0]}"
+            f"[Escalation] patient=***{masked_id} risk={risk_level} status={status}"
         )
 
         return {

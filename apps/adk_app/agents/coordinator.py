@@ -126,7 +126,7 @@ def escalate_patient(patient_id: str, risk_level: str, summary: str) -> dict:
 
         if loop and loop.is_running():
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(asyncio.run, _run())
+                future = pool.submit(lambda: asyncio.run(_run()))
                 result = future.result(timeout=30)
         else:
             result = asyncio.run(_run())
@@ -136,7 +136,7 @@ def escalate_patient(patient_id: str, risk_level: str, summary: str) -> dict:
         result = {"escalation_status": "error", "error": str(exc)}
 
     logger.info(
-        f"[Coordinator] Escalation triggered for patient=***{patient_id[-4:]} "
+        f"[Coordinator] Escalation triggered for patient=***{patient_id[-4:] if len(patient_id) >= 4 else patient_id} "
         f"risk={risk_level} status={result.get('escalation_status')}"
     )
     return result
