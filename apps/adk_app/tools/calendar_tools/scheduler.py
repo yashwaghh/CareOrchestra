@@ -77,6 +77,8 @@ class CalendarScheduler:
         """Return an RFC-3339 timestamp string (UTC, with Z suffix)."""
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # ------------------------------------------------------------------
@@ -106,8 +108,7 @@ class CalendarScheduler:
         """
         if self.use_mock:
             event_id = f"mock_event_{appointment_time.timestamp()}"
-            print(f"[MOCK] Scheduling appointment: {patient_name} with {provider_name}")
-            print(f"[MOCK] Time: {appointment_time}")
+            logger.debug("[MOCK] Scheduling appointment at %s", self._format_rfc3339(appointment_time))
             return event_id
 
         end_time = appointment_time + timedelta(minutes=duration_minutes)
@@ -151,7 +152,7 @@ class CalendarScheduler:
         """
         if self.use_mock:
             event_id = f"mock_followup_{followup_date.timestamp()}"
-            print(f"[MOCK] Scheduling follow-up: {followup_type} for patient {patient_id}")
+            logger.debug("[MOCK] Scheduling follow-up of type %s", followup_type)
             return event_id
 
         end_time = followup_date + timedelta(minutes=30)
@@ -220,6 +221,15 @@ class CalendarScheduler:
 
         busy_periods = freebusy.get("calendars", {}).get(self.calendar_id, {}).get("busy", [])
 
+        # Pre-parse busy period timestamps once to avoid repeated parsing in the inner loop.
+        parsed_busy = [
+            (
+                datetime.fromisoformat(b["start"].replace("Z", "+00:00")),
+                datetime.fromisoformat(b["end"].replace("Z", "+00:00")),
+            )
+            for b in busy_periods
+        ]
+
         slots = []
         slot_delta = timedelta(minutes=duration_minutes)
         cursor = start_date if start_date.tzinfo else start_date.replace(tzinfo=timezone.utc)
@@ -228,9 +238,8 @@ class CalendarScheduler:
         while cursor + slot_delta <= end_date_tz:
             slot_end = cursor + slot_delta
             overlap = any(
-                cursor < datetime.fromisoformat(b["end"].replace("Z", "+00:00"))
-                and slot_end > datetime.fromisoformat(b["start"].replace("Z", "+00:00"))
-                for b in busy_periods
+                cursor < b_end and slot_end > b_start
+                for b_start, b_end in parsed_busy
             )
             if not overlap:
                 slots.append(cursor.strftime("%Y-%m-%d %H:%M"))
@@ -249,7 +258,7 @@ class CalendarScheduler:
             Success status
         """
         if self.use_mock:
-            print(f"[MOCK] Cancelling appointment: {event_id}")
+            logger.debug("[MOCK] Cancelling appointment: %s", event_id)
             return True
 
         try:
