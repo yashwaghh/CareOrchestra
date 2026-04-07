@@ -4,9 +4,15 @@ import datetime
 import logging
 import os
 
+from ..tools.bigquery_tools.client import BigQueryClient
 from ..tools.gmail_tools.alert_sender import GmailSender
 
 logger = logging.getLogger(__name__)
+
+_bq_client = BigQueryClient(
+    project_id=os.getenv("GCP_PROJECT_ID"),
+    dataset_id="careorchestra"
+)
 
 
 class EscalationAgent:
@@ -14,9 +20,8 @@ class EscalationAgent:
     Manages critical alerts:
     - Identifies high-risk situations requiring immediate attention
     - Formats alerts for clinician consumption
-    - Routes alerts to appropriate healthcare providers
-    - Handles Gmail integration for alert delivery
-    - Tracks escalation status and outcomes
+    - Routes alerts to appropriate healthcare providers via email
+    - Logs escalation events to BigQuery for audit purposes
     """
 
     def __init__(self):
@@ -39,6 +44,9 @@ class EscalationAgent:
     ) -> dict:
         """
         Escalate a patient alert to the appropriate healthcare provider.
+
+        Fetches escalation contacts, sends an alert email, and logs the event
+        to BigQuery for audit purposes.
 
         Args:
             patient_id: Patient identifier.
@@ -67,6 +75,9 @@ class EscalationAgent:
             f"[Escalation] patient=***{masked_id} risk={risk_level} status={status}"
         )
 
+        # Persist escalation event to BigQuery for audit trail
+        logged = await self._log_escalation(patient_id, risk_level, alert_content, contacts)
+
         return {
             "escalation_status": status,
             "patient_id": patient_id,
@@ -74,6 +85,7 @@ class EscalationAgent:
             "contacts_notified": contacts,
             "escalated_at": escalated_at,
             "alert_preview": alert_content[:200],
+            "logged": logged,
         }
 
     async def send_alert_to_doctor(
@@ -105,9 +117,9 @@ class EscalationAgent:
         """
         Return escalation contacts for a patient.
 
-        In the current implementation the on-call doctor email is read from
-        the ``DOCTOR_EMAIL`` environment variable.  This can be extended to
-        query a care-team registry in BigQuery.
+        Queries the ``escalation_contacts`` BigQuery table first; falls back
+        to the ``DOCTOR_EMAIL`` environment variable if the table has no rows
+        or does not exist.
 
         Args:
             patient_id: Patient identifier.
@@ -115,6 +127,22 @@ class EscalationAgent:
         Returns:
             List of email addresses to notify.
         """
+        try:
+            query = f"""
+            SELECT contact_email
+            FROM `{_bq_client.project_id}.{_bq_client.dataset_id}.escalation_contacts`
+            WHERE patient_id = @patient_id
+            ORDER BY priority ASC
+            LIMIT 5
+            """
+            results = await _bq_client.query(query, {"patient_id": patient_id})
+            emails = [r.get("contact_email", "") for r in results if r.get("contact_email")]
+            if emails:
+                return emails
+        except Exception:
+            # Table may not exist yet — fall through to env-var fallback
+            pass
+
         contact = os.getenv("DOCTOR_EMAIL", self.default_doctor_email)
         return [contact] if contact else []
 
@@ -139,7 +167,7 @@ class EscalationAgent:
         if alert_summary.get("summary"):
             lines += ["Summary:", alert_summary["summary"], ""]
 
-        # Structured findings from AnalysisAgent
+        # Structured findings from AnalysisAgent / MonitoringAgent
         findings = alert_summary.get("findings", [])
         if findings:
             lines.append("Findings:")
@@ -150,7 +178,7 @@ class EscalationAgent:
                 )
             lines.append("")
 
-        # Recommendations from AnalysisAgent
+        # Recommendations
         recommendations = alert_summary.get("recommendations", [])
         if recommendations:
             lines.append("Recommended Actions:")
@@ -160,3 +188,24 @@ class EscalationAgent:
 
         lines.append("— CareOrchestra Automated Alert System —")
         return "\n".join(lines)
+
+    async def _log_escalation(
+        self,
+        patient_id: str,
+        risk_level: str,
+        alert_content: str,
+        notified: list,
+    ) -> bool:
+        """Persist the escalation event to BigQuery for audit purposes."""
+        try:
+            row = {
+                "patient_id": patient_id,
+                "risk_level": risk_level,
+                "alert_content": alert_content[:1000],  # BigQuery column size cap
+                "contacts_notified": ", ".join(notified),
+                "created_at": datetime.datetime.utcnow().isoformat(),
+            }
+            return await _bq_client.insert("escalation_logs", [row])
+        except Exception as e:
+            logger.error(f"Failed to log escalation: {e}")
+            return False
