@@ -134,7 +134,7 @@ async def get_adherence_summary(patient_id: str) -> dict:
             "total_scheduled": total,
             "total_taken": taken_count,
             "total_missed": total - taken_count,
-            "risk_level": risk_level,
+            "adherence_risk": risk_level,
             "period": "7 days"
         }
 

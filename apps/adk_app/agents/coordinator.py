@@ -7,8 +7,9 @@ from google.genai import types
 from dotenv import load_dotenv
 from ..tools.bigquery_tools.client import BigQueryClient
 from .monitoring import MonitoringAgent
-from .vitals import VitalsAgent
-from .medication import MedicationAgent
+from .vitals import VitalsAgent, get_patient_vitals
+from .medication import MedicationAgent, get_adherence_summary
+from .analysis import AnalysisAgent
 from .escalation import EscalationAgent
 
 load_dotenv()
@@ -108,12 +109,75 @@ async def call_medication_agent(patient_id: str) -> dict:
     return await agent.check_medication_adherence(patient_id)
 
 
+async def call_analysis_agent(patient_id: str) -> dict:
+    """
+    Run the Analysis Agent to produce a composite risk score from the patient's
+    raw vitals and medication adherence data.  Call this after call_vitals_agent
+    and call_medication_agent to get a structured risk assessment before
+    deciding whether to escalate.
+
+    Args:
+        patient_id: The patient's unique identifier.
+
+    Returns:
+        Dict with 'risk_level', 'composite_score', 'domain_scores', 'findings',
+        'recommendations', 'reasoning', and 'escalate' keys.
+    """
+    vitals_raw = await get_patient_vitals(patient_id)
+    adherence_raw = await get_adherence_summary(patient_id)
+
+    # Convert vitals issues to the format AnalysisAgent expects
+    _LEVEL_MAP = {
+        "crisis": "critical",
+        "critical": "critical",
+        "severe_tachycardia": "critical",
+        "severe_bradycardia": "critical",
+        "severe_hyperglycemia": "critical",
+        "severe_hypoglycemia": "critical",
+        "high": "high",
+        "warning": "warning",
+        "tachycardia": "moderate",
+        "bradycardia": "moderate",
+        "low": "low",
+    }
+    _CODE_MAP = {
+        "blood_pressure": "SBP_ELEVATED",
+        "glucose": "GLUCOSE_HIGH",
+        "spo2": "SPO2_LOW",
+        "heart_rate": "HR_ELEVATED",
+    }
+    findings = []
+    for issue in vitals_raw.get("issues", []):
+        findings.append({
+            "code": _CODE_MAP.get(issue.get("type", ""), issue.get("type", "VITAL_ABNORMAL").upper()),
+            "description": f"{issue.get('type', 'vital')} abnormality: {issue.get('value', '')}",
+            "severity": _LEVEL_MAP.get(issue.get("level", "low"), "low"),
+            "value": None,
+            "threshold": None,
+        })
+
+    vitals_data = {"findings": findings}
+
+    # Convert adherence data to the format AnalysisAgent expects
+    medication_data = {
+        "adherence_score": adherence_raw.get("adherence_rate"),
+        "findings": [],
+        "interactions": [],
+    }
+
+    agent = AnalysisAgent()
+    return await agent.analyze_patient_status(patient_id, vitals_data, medication_data, {})
+
+
 async def send_to_monitoring_agent(patient_id: str, summary: str) -> dict:
     """
     Send the patient's collected symptoms and status to the Monitoring Agent.
     Call this once you have collected enough information (2-3 messages).
     Returns a clinical recommendation and an escalation flag.
     If the returned dict has escalation_needed=True, call escalate_patient next.
+
+    Note: escalation_needed is False when the Monitoring Agent has already
+    dispatched an escalation alert internally, to prevent duplicate notifications.
 
     Args:
         patient_id: The patient's unique identifier.
@@ -122,9 +186,13 @@ async def send_to_monitoring_agent(patient_id: str, summary: str) -> dict:
     monitor = MonitoringAgent()
     result = await monitor.process_summary(patient_id, summary)
 
-    # Normalise to a consistent shape so Gemini can inspect escalation_needed
     risk_level = result.get("risk_level", "low")
-    escalation_needed = risk_level in ("high", "critical")
+
+    # MonitoringAgent escalates internally for high/critical cases.
+    # Only set escalation_needed=True when it hasn't already done so, to
+    # prevent a second alert being sent by the Coordinator.
+    already_escalated = result.get("action") in ("escalated", "alerted")
+    escalation_needed = risk_level in ("high", "critical") and not already_escalated
 
     return {
         **result,
@@ -186,16 +254,17 @@ Your job:
 1. Call get_patient_profile first to load the patient's name and conditions
 2. Call call_vitals_agent to retrieve the patient's current vital signs
 3. Call call_medication_agent to check their recent medication adherence
-4. Greet the patient warmly by name and ask how they are doing today
-5. Ask ONE follow-up question at a time to understand:
+4. Call call_analysis_agent to get a composite risk score combining vitals and medication data
+5. Greet the patient warmly by name and ask how they are doing today
+6. Ask ONE follow-up question at a time to understand:
    - Any symptoms they are experiencing
    - Their energy and mood
    - Whether they have taken their medications today
-6. After 2-3 exchanges call send_to_monitoring_agent with a clear summary that
+7. After 2-3 exchanges call send_to_monitoring_agent with a clear summary that
    includes both what the patient reported AND the objective vitals/adherence data
-7. If send_to_monitoring_agent returns escalation_needed=True, immediately call
+8. If send_to_monitoring_agent returns escalation_needed=True, immediately call
    escalate_patient with the patient_id, risk_level, and symptom summary
-8. Relay the monitoring agent's response back in warm, simple language
+9. Relay the monitoring agent's response back in warm, simple language
 
 Rules:
 - One question per turn only
@@ -210,6 +279,7 @@ class CoordinatorAgent:
             get_patient_profile,
             call_vitals_agent,
             call_medication_agent,
+            call_analysis_agent,
             send_to_monitoring_agent,
             escalate_patient,
         ]
@@ -243,17 +313,18 @@ class CoordinatorAgent:
             )
 
             # append model turn to keep conversation going
+            response_text = response.text or ""
             self.history.append(
                 types.Content(
                     role="model",
-                    parts=[types.Part(text=response.text)]
+                    parts=[types.Part(text=response_text)]
                 )
             )
 
             return {
                 "status": "success",
                 "agent": "Coordinator (Gemini 2.5 Flash)",
-                "message_to_patient": response.text
+                "message_to_patient": response_text
             }
 
         except Exception as e:

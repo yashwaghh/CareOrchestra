@@ -9,6 +9,8 @@ from apps.adk_app.agents.coordinator import CoordinatorAgent
 from apps.adk_app.agents.vitals import VitalsAgent
 from apps.adk_app.agents.monitoring import MonitoringAgent
 from apps.adk_app.agents.medication import MedicationAgent
+from apps.adk_app.agents.analysis import AnalysisAgent
+from apps.adk_app.agents.reporting import ReportingAgent
 from apps.adk_app.config import get_config
 
 # 1. Load the environment variables BEFORE anything else happens
@@ -54,6 +56,8 @@ class CareOrchestraApp:
         self.agents["vitals"] = VitalsAgent()
         self.agents["medication"] = MedicationAgent()
         self.agents["monitoring"] = MonitoringAgent()
+        self.agents["analysis"] = AnalysisAgent()
+        self.agents["reporting"] = ReportingAgent()
         
         # Create Coordinator
         self.agents["coordinator"] = CoordinatorAgent()
