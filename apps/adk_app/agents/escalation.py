@@ -1,8 +1,9 @@
 """Escalation Agent - Handles high-risk scenarios and alerts doctors."""
 
-import os
-import logging
 import datetime
+import logging
+import os
+
 from ..tools.bigquery_tools.client import BigQueryClient
 from ..tools.gmail_tools.alert_sender import GmailSender
 
@@ -24,63 +25,66 @@ class EscalationAgent:
     """
 
     def __init__(self):
-        sender_email = os.getenv("SENDER_EMAIL", "alerts@careorchestra.app")
-        use_mock = os.getenv("GMAIL_MOCK", "true").lower() != "false"
-        self._gmail = GmailSender(sender_email=sender_email, use_mock=use_mock)
+        """Initialize escalation agent with Gmail sender."""
+        self.gmail = GmailSender(
+            sender_email=os.getenv(
+                "ALERT_SENDER_EMAIL", "careorchestra-alerts@example.com"
+            ),
+            use_mock=os.getenv("GMAIL_USE_MOCK", "true").lower() != "false",
+        )
+        self.default_doctor_email = os.getenv(
+            "DOCTOR_EMAIL", "doctor@example.com"
+        )
 
     async def escalate_alert(
         self,
         patient_id: str,
         risk_level: str,
-        alert_summary: dict
+        alert_summary: dict,
     ) -> dict:
         """
-        Escalate a patient alert to the healthcare provider.
+        Escalate a patient alert to the appropriate healthcare provider.
 
-        Fetches the patient's escalation contacts, sends an alert email,
-        and logs the escalation event to BigQuery.
+        Fetches escalation contacts, sends an alert email, and logs the event
+        to BigQuery for audit purposes.
 
         Args:
             patient_id: Patient identifier.
-            risk_level: Risk level — 'high' or 'critical'.
-            alert_summary: Dict summarising the findings (vitals, summary text, etc.).
+            risk_level: Risk level string (``"high"`` or ``"critical"``).
+            alert_summary: Dict with findings, recommendations, and/or a
+                plain-text ``summary`` field produced by upstream agents.
 
         Returns:
-            dict with 'escalation_status', 'contacts_notified', and 'logged' keys.
+            Escalation status dict with delivery confirmation.
         """
+        escalated_at = datetime.datetime.utcnow().isoformat()
+
         contacts = await self.get_escalation_contacts(patient_id)
         if not contacts:
-            default_email = os.getenv("DEFAULT_DOCTOR_EMAIL", "")
-            if default_email:
-                contacts = [{"email": default_email, "name": "Care Team"}]
+            contacts = [self.default_doctor_email]
 
-        # Build a readable alert body
         alert_content = self._format_alert(patient_id, risk_level, alert_summary)
 
-        notified = []
-        for contact in contacts:
-            email = contact.get("email", "")
-            name = contact.get("name", "Care Team")
-            if not email:
-                continue
-            success = await self._gmail.send_alert(
-                recipient=email,
-                patient_name=f"Patient {patient_id}",
-                alert_content=alert_content,
-            )
-            if success:
-                notified.append(email)
-                logger.info(
-                    f"[Escalation] Alert sent to {name} "
-                    f"for patient=***{patient_id[-4:]} risk={risk_level}"
-                )
+        success = await self.send_alert_to_doctor(
+            contacts[0], patient_id, alert_content
+        )
 
-        # Log escalation event to BigQuery
-        logged = await self._log_escalation(patient_id, risk_level, alert_content, notified)
+        status = "sent" if success else "failed"
+        masked_id = patient_id[-4:] if len(patient_id) >= 4 else patient_id
+        logger.info(
+            f"[Escalation] patient=***{masked_id} risk={risk_level} status={status}"
+        )
+
+        # Persist escalation event to BigQuery for audit trail
+        logged = await self._log_escalation(patient_id, risk_level, alert_content, contacts)
 
         return {
-            "escalation_status": "sent" if notified else "no_contacts",
-            "contacts_notified": notified,
+            "escalation_status": status,
+            "patient_id": patient_id,
+            "risk_level": risk_level,
+            "contacts_notified": contacts,
+            "escalated_at": escalated_at,
+            "alert_preview": alert_content[:200],
             "logged": logged,
         }
 
@@ -88,101 +92,101 @@ class EscalationAgent:
         self,
         doctor_email: str,
         patient_name: str,
-        alert_content: str
+        alert_content: str,
     ) -> bool:
         """
-        Send an alert email to a specific doctor.
+        Send an alert email to a doctor via GmailSender.
 
         Args:
             doctor_email: Doctor's email address.
-            patient_name: Patient name for the email subject.
-            alert_content: Formatted alert message body.
+            patient_name: Patient identifier or name for the email.
+            alert_content: Formatted alert body.
 
         Returns:
-            True if the email was sent successfully, False otherwise.
+            ``True`` if delivery succeeded (or mock mode is active).
         """
-        return await self._gmail.send_alert(
-            recipient=doctor_email,
-            patient_name=patient_name,
-            alert_content=alert_content,
-        )
+        try:
+            return await self.gmail.send_alert(
+                doctor_email, patient_name, alert_content
+            )
+        except Exception as exc:
+            logger.error(f"[Escalation] Email delivery failed: {exc}")
+            return False
 
     async def get_escalation_contacts(self, patient_id: str) -> list:
         """
-        Retrieve escalation contacts for the patient from BigQuery.
+        Return escalation contacts for a patient.
 
-        Queries the ``escalation_contacts`` table first; falls back to the
-        patient's primary doctor field in the ``patients`` table if that
-        table does not exist or has no rows.
+        Queries the ``escalation_contacts`` BigQuery table first; falls back
+        to the ``DOCTOR_EMAIL`` environment variable if the table has no rows
+        or does not exist.
 
         Args:
             patient_id: Patient identifier.
 
         Returns:
-            List of dicts with 'email' and 'name' keys.
+            List of email addresses to notify.
         """
         try:
             query = f"""
-            SELECT contact_email AS email, contact_name AS name
+            SELECT contact_email
             FROM `{_bq_client.project_id}.{_bq_client.dataset_id}.escalation_contacts`
             WHERE patient_id = @patient_id
             ORDER BY priority ASC
             LIMIT 5
             """
             results = await _bq_client.query(query, {"patient_id": patient_id})
-            if results:
-                return [{"email": r.get("email", ""), "name": r.get("name", "Care Team")}
-                        for r in results if r.get("email")]
+            emails = [r.get("contact_email", "") for r in results if r.get("contact_email")]
+            if emails:
+                return emails
         except Exception:
-            # Table may not exist yet — fall through to patient record lookup
+            # Table may not exist yet — fall through to env-var fallback
             pass
 
-        try:
-            query = f"""
-            SELECT doctor_email AS email, CONCAT(doctor_first_name, ' ', doctor_last_name) AS name
-            FROM `{_bq_client.project_id}.{_bq_client.dataset_id}.patients`
-            WHERE patient_id = @patient_id
-            LIMIT 1
-            """
-            results = await _bq_client.query(query, {"patient_id": patient_id})
-            if results and results[0].get("email"):
-                return [{"email": results[0]["email"], "name": results[0].get("name", "Doctor")}]
-        except Exception:
-            pass
-
-        return []
+        contact = os.getenv("DOCTOR_EMAIL", self.default_doctor_email)
+        return [contact] if contact else []
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _format_alert(self, patient_id: str, risk_level: str, alert_summary: dict) -> str:
-        """Build a human-readable alert body for the email."""
+    @staticmethod
+    def _format_alert(
+        patient_id: str, risk_level: str, alert_summary: dict
+    ) -> str:
+        """Build a human-readable clinical alert message."""
         lines = [
-            f"CareOrchestra Clinical Alert",
-            f"=============================",
+            f"⚠️  CLINICAL ALERT — {risk_level.upper()} RISK",
             f"Patient ID : {patient_id}",
             f"Risk Level : {risk_level.upper()}",
-            f"Timestamp  : {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
+            f"Generated  : {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
             "",
         ]
 
-        if "coordinator_summary" in alert_summary:
-            lines += ["Patient Report:", alert_summary["coordinator_summary"], ""]
+        # Plain-text summary (e.g. from CoordinatorAgent)
+        if alert_summary.get("summary"):
+            lines += ["Summary:", alert_summary["summary"], ""]
 
-        for key in ("critical_vitals", "high_risk_vitals"):
-            if key in alert_summary:
-                label = "Critical Vitals" if "critical" in key else "High-Risk Vitals"
-                lines += [f"{label}:", alert_summary[key], ""]
-
-        if "all_vitals" in alert_summary:
-            vitals = alert_summary["all_vitals"]
-            lines.append("Latest Readings:")
-            for vtype, val in vitals.items():
-                lines.append(f"  {vtype}: {val}")
+        # Structured findings from AnalysisAgent / MonitoringAgent
+        findings = alert_summary.get("findings", [])
+        if findings:
+            lines.append("Findings:")
+            for f in findings:
+                severity_tag = f.get("severity", "").upper()
+                lines.append(
+                    f"  [{severity_tag}] {f.get('code', '')} — {f.get('description', '')}"
+                )
             lines.append("")
 
-        lines.append("Please review and take appropriate action.")
+        # Recommendations
+        recommendations = alert_summary.get("recommendations", [])
+        if recommendations:
+            lines.append("Recommended Actions:")
+            for rec in recommendations:
+                lines.append(f"  • {rec}")
+            lines.append("")
+
+        lines.append("— CareOrchestra Automated Alert System —")
         return "\n".join(lines)
 
     async def _log_escalation(
@@ -197,7 +201,7 @@ class EscalationAgent:
             row = {
                 "patient_id": patient_id,
                 "risk_level": risk_level,
-                "alert_content": alert_content[:1000],  # cap to avoid oversized rows
+                "alert_content": alert_content[:1000],  # BigQuery column size cap
                 "contacts_notified": ", ".join(notified),
                 "created_at": datetime.datetime.utcnow().isoformat(),
             }

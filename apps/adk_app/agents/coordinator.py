@@ -1,5 +1,7 @@
 import os
 import logging
+import concurrent.futures
+import asyncio
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -7,6 +9,7 @@ from ..tools.bigquery_tools.client import BigQueryClient
 from .monitoring import MonitoringAgent
 from .vitals import VitalsAgent
 from .medication import MedicationAgent
+from .escalation import EscalationAgent
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -109,14 +112,72 @@ async def send_to_monitoring_agent(patient_id: str, summary: str) -> dict:
     """
     Send the patient's collected symptoms and status to the Monitoring Agent.
     Call this once you have collected enough information (2-3 messages).
-    Returns a clinical recommendation or an escalation flag.
+    Returns a clinical recommendation and an escalation flag.
+    If the returned dict has escalation_needed=True, call escalate_patient next.
 
     Args:
         patient_id: The patient's unique identifier.
         summary: A clear natural-language summary of what the patient reported.
     """
     monitor = MonitoringAgent()
-    return await monitor.process_summary(patient_id, summary)
+    result = await monitor.process_summary(patient_id, summary)
+
+    # Normalise to a consistent shape so Gemini can inspect escalation_needed
+    risk_level = result.get("risk_level", "low")
+    escalation_needed = risk_level in ("high", "critical")
+
+    return {
+        **result,
+        "escalation_needed": escalation_needed,
+        "patient_id": patient_id,
+    }
+
+
+def escalate_patient(patient_id: str, risk_level: str, summary: str) -> dict:
+    """
+    Escalate a high-risk patient to the healthcare team.
+    Call this immediately when send_to_monitoring_agent returns
+    escalation_needed=True.
+
+    Args:
+        patient_id: Patient identifier.
+        risk_level: Risk level string (e.g. ``"high"`` or ``"critical"``).
+        summary: Plain-text summary of the patient's reported symptoms.
+
+    Returns:
+        Escalation confirmation dict.
+    """
+    agent = EscalationAgent()
+    alert_summary = {"summary": summary, "source": "coordinator_agent"}
+
+    async def _run() -> dict:
+        return await agent.escalate_alert(patient_id, risk_level, alert_summary)
+
+    try:
+        # Run the coroutine safely regardless of whether we are already inside
+        # a running event loop.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(lambda: asyncio.run(_run()))
+                result = future.result(timeout=30)
+        else:
+            result = asyncio.run(_run())
+
+    except Exception as exc:
+        logger.error(f"[Coordinator] Escalation failed: {exc}")
+        result = {"escalation_status": "error", "error": str(exc)}
+
+    masked_id = patient_id[-4:] if len(patient_id) >= 4 else patient_id
+    logger.info(
+        f"[Coordinator] Escalation triggered for patient=***{masked_id} "
+        f"risk={risk_level} status={result.get('escalation_status')}"
+    )
+    return result
 
 
 SYSTEM_INSTRUCTION = """You are the Coordinator Agent for CareOrchestra, a chronic care system.
@@ -132,7 +193,9 @@ Your job:
    - Whether they have taken their medications today
 6. After 2-3 exchanges call send_to_monitoring_agent with a clear summary that
    includes both what the patient reported AND the objective vitals/adherence data
-7. Relay the monitoring agent's response back in warm, simple language
+7. If send_to_monitoring_agent returns escalation_needed=True, immediately call
+   escalate_patient with the patient_id, risk_level, and symptom summary
+8. Relay the monitoring agent's response back in warm, simple language
 
 Rules:
 - One question per turn only
@@ -148,6 +211,7 @@ class CoordinatorAgent:
             call_vitals_agent,
             call_medication_agent,
             send_to_monitoring_agent,
+            escalate_patient,
         ]
         self.history: list[types.Content] = []   # we own the chat history
 
