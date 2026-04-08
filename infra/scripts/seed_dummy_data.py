@@ -70,7 +70,6 @@ def main() -> None:
                 "last_name": last,
                 "chronic_conditions": condition,
                 "date_of_birth": dob.isoformat(),
-                "updated_at": now.isoformat() + "Z",
                 "created_at": now.isoformat() + "Z",
             }
         )

@@ -49,12 +49,12 @@ CREATE TABLE IF NOT EXISTS `$ProjectId.$Dataset.patients`
   patient_id STRING NOT NULL,
   first_name STRING,
   last_name STRING,
-  chronic_conditions STRING,
   date_of_birth DATE,
-  updated_at TIMESTAMP,
+  phone STRING,
+  email STRING,
+  chronic_conditions STRING,
   created_at TIMESTAMP
-)
-"
+)"
 
 Run-BqQuery "
 CREATE TABLE IF NOT EXISTS `$ProjectId.$Dataset.vitals`
