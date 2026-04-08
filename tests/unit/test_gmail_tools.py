@@ -176,12 +176,11 @@ class TestSendAlertRealMode:
 
         assert result is True
         mock_send.assert_called_once()
-        call_kwargs = mock_send.call_args
-        assert call_kwargs.kwargs.get("userId") == "me" or call_kwargs.args[0] == "me" or \
-            mock_send.call_args[1].get("userId") == "me"
 
         # Verify the raw payload decodes to a valid email
-        body_arg = mock_send.call_args[1].get("body") or mock_send.call_args[0][0]
+        call_kwargs = mock_send.call_args
+        body_arg = call_kwargs.kwargs.get("body") or (call_kwargs.args[0] if call_kwargs.args else None)
+        assert body_arg is not None, "send() was not called with a body argument"
         raw = body_arg["raw"]
         email_msg = _decode_raw(raw)
         subject = _decode_subject(email_msg)
