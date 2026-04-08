@@ -1,7 +1,5 @@
 import logging
 import os
-import google.cloud.logging
-# IMPORTANT: This import was missing or misplaced
 from dotenv import load_dotenv
 
 # Internal Imports
@@ -9,6 +7,8 @@ from apps.adk_app.agents.coordinator import CoordinatorAgent
 from apps.adk_app.agents.vitals import VitalsAgent
 from apps.adk_app.agents.monitoring import MonitoringAgent
 from apps.adk_app.agents.medication import MedicationAgent
+from apps.adk_app.agents.analysis import AnalysisAgent
+from apps.adk_app.agents.reporting import ReportingAgent
 from apps.adk_app.config import get_config
 
 # 1. Load the environment variables BEFORE anything else happens
@@ -33,18 +33,26 @@ class CareOrchestraApp:
 
     def setup_logging(self) -> None:
         """Configure logging for the application."""
+        # Default to local logging. Cloud logging is opt-in to avoid noisy startup
+        # failures when IAM permission logging.logEntries.create is missing.
+        logging.basicConfig(
+            level=getattr(logging, self.config.log_level.upper(), logging.INFO),
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
+
+        enable_gcp_logging = os.getenv("ENABLE_GCP_LOGGING", "false").lower() == "true"
+        if not enable_gcp_logging:
+            logger.info(f"Standard logging initialized at level {self.config.log_level}")
+            return
+
         try:
-            # Try to use Google Cloud Logging if available
+            import google.cloud.logging
+
             cloud_client = google.cloud.logging.Client()
             cloud_client.setup_logging()
             logger.info("Google Cloud Logging initialized.")
-        except Exception:
-            # Fallback to standard logging
-            logging.basicConfig(
-                level=getattr(logging, self.config.log_level.upper(), logging.INFO),
-                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            logger.info(f"Standard logging initialized at level {self.config.log_level}")
+        except Exception as exc:
+            logger.warning("Cloud logging disabled, falling back to standard logging: %s", exc)
 
     def initialize_agents(self) -> None:
         """Initialize all specialized agents."""
@@ -54,6 +62,8 @@ class CareOrchestraApp:
         self.agents["vitals"] = VitalsAgent()
         self.agents["medication"] = MedicationAgent()
         self.agents["monitoring"] = MonitoringAgent()
+        self.agents["analysis"] = AnalysisAgent()
+        self.agents["reporting"] = ReportingAgent()
         
         # Create Coordinator
         self.agents["coordinator"] = CoordinatorAgent()
