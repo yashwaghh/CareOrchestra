@@ -44,7 +44,6 @@ def main() -> None:
             bigquery.SchemaField("last_name", "STRING"),
             bigquery.SchemaField("chronic_conditions", "STRING"),
             bigquery.SchemaField("date_of_birth", "DATE"),
-            bigquery.SchemaField("updated_at", "TIMESTAMP"),
             bigquery.SchemaField("created_at", "TIMESTAMP"),
         ],
     )
