@@ -14,6 +14,7 @@ from .analysis import AnalysisAgent
 from .escalation import EscalationAgent
 from .Symptoms_agent import assess_symptoms
 from .scheduling import SchedulingAgent
+from typing import TypedDict, List
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -136,7 +137,18 @@ async def call_medication_agent(patient_id: str) -> dict:
     """
     agent = MedicationAgent()
     return await agent.check_medication_adherence(patient_id)
-async def handle_slot_selection(patient_id: str, slot_number: int, slots: list) -> dict:
+class Slot(TypedDict):
+    id: str
+    doctor: str
+    time: str
+    duration: int
+    location: str
+
+async def handle_slot_selection(
+    patient_id: str,
+    slot_number: int,
+    slots: List[Slot]   # ✅ FIXED
+) -> dict:
     """
     Book the appointment slot chosen by the patient.
     Call this when the patient replies with a slot number (1, 2, or 3)
