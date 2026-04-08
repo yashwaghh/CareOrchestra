@@ -61,7 +61,8 @@ apps/adk_app/
 └── app.py           # Main entry point
 ```
 
-See [Architecture Documentation](docs/architecture.md) for details.
+See [Architecture Documentation](docs/architecture.md) for details, or jump straight to the
+[Visual Diagrams](docs/diagrams.md) for rendered Mermaid charts.
 
 ## Planned Integrations
 
@@ -107,6 +108,7 @@ See [Demo Script](docs/demo_script.md) for detailed testing scenarios.
 ## Documentation
 
 - **[Architecture](docs/architecture.md)** - System design and components
+- **[Diagrams](docs/diagrams.md)** - System architecture, workflow & use case diagrams (Mermaid)
 - **[Agent Responsibilities](docs/agent_responsibilities.md)** - What each agent does
 - **[Workflows](docs/workflows.md)** - Example care coordination flows
 - **[BigQuery Schema](docs/bigquery_schema.md)** - Database structure

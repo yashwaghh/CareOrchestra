@@ -135,3 +135,10 @@ Key settings:
 ## Getting Started
 
 See [Demo Script](docs/demo_script.md) for running the system with mock data.
+
+---
+
+## Visual Diagrams
+
+For rendered Mermaid diagrams (system architecture, workflow, and use case diagrams), see
+[docs/diagrams.md](diagrams.md).
