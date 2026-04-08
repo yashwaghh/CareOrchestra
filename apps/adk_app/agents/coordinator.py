@@ -136,7 +136,31 @@ async def call_medication_agent(patient_id: str) -> dict:
     """
     agent = MedicationAgent()
     return await agent.check_medication_adherence(patient_id)
+async def handle_slot_selection(patient_id: str, slot_number: int, slots: list) -> dict:
+    """
+    Book the appointment slot chosen by the patient.
+    Call this when the patient replies with a slot number (1, 2, or 3)
+    after being presented with urgent appointment options.
 
+    Args:
+        patient_id: The patient's unique identifier.
+        slot_number: The slot number the patient chose (1, 2, or 3).
+        slots: The list of slots previously returned by get_available_slots.
+
+    Returns:
+        Booking confirmation dict with appointment details.
+    """
+    if not slots or slot_number < 1 or slot_number > len(slots):
+        return {"status": "error", "error": "Invalid slot selection"}
+
+    selected_slot = slots[slot_number - 1]
+    scheduling = SchedulingAgent()
+    result = await scheduling.book_slot(
+        patient_id=patient_id,
+        slot_id=selected_slot["id"],
+        doctor_note="Booked via critical alert — patient self-selected"
+    )
+    return result
 
 async def call_analysis_agent(patient_id: str) -> dict:
     """
@@ -388,6 +412,8 @@ class CoordinatorAgent:
     def __init__(self):
         api_key = os.getenv("GOOGLE_API_KEY")
         self.client = genai.Client(api_key=api_key) if api_key else None
+        self.pending_slots: list = []          # ← ADD THIS
+        self.selection_state: str = ""   
         self.tools = [
             get_patient_profile,
             call_vitals_agent,
@@ -396,15 +422,42 @@ class CoordinatorAgent:
             call_symptoms_agent,
             send_to_monitoring_agent,
             escalate_patient,
+             handle_slot_selection, 
             # TODO: handle_slot_selection (for patient choice),
         ]
         self.history: list[types.Content] = []   # we own the chat history
 
     async def coordinate(self, event: dict) -> dict:
         patient_id = event.get("patient_id")
-        user_message = event.get("message")
+        user_message = event.get("message", "").strip()
 
         try:
+            # ── Slot selection intercept ──────────────────────────────────
+            if self.selection_state == "waiting_for_slot_selection" and self.pending_slots:
+                if user_message in ("1", "2", "3"):
+                    slot_number = int(user_message)
+                    result = await handle_slot_selection(patient_id, slot_number, self.pending_slots)
+                    self.selection_state = ""
+                    self.pending_slots = []
+                    if result.get("status") == "confirmed":
+                        appt = result["appointment"]
+                        return {
+                            "status": "success",
+                            "agent": "Coordinator",
+                            "message_to_patient": (
+                                f"Your appointment with {appt['provider_name']} "
+                                f"at {appt['scheduled_at']} has been confirmed! "
+                                f"Location: {appt['location']}. Please arrive 10 minutes early."
+                            )
+                        }
+                    else:
+                        return {
+                            "status": "error",
+                            "message_to_patient": "Sorry, I couldn't book that slot. Please try again or contact the clinic directly."
+                        }
+            # ─────────────────────────────────────────────────────────────
+
+            # ── Mock fallback (no API key) ────────────────────────────────
             if self.client is None:
                 profile = await get_patient_profile(patient_id)
                 assessment = assess_symptoms(
@@ -419,8 +472,9 @@ class CoordinatorAgent:
                     "agent": "Coordinator (mock)",
                     "message_to_patient": assessment,
                 }
+            # ─────────────────────────────────────────────────────────────
 
-            # append user turn
+            # ── Normal Gemini path ────────────────────────────────────────
             self.history.append(
                 types.Content(
                     role="user",
@@ -428,7 +482,6 @@ class CoordinatorAgent:
                 )
             )
 
-            # async call — supports async tool functions
             response = await self.client.aio.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=self.history,
@@ -436,22 +489,28 @@ class CoordinatorAgent:
                     system_instruction=SYSTEM_INSTRUCTION,
                     tools=self.tools,
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                        disable=False               # Gemini calls tools automatically
+                        disable=False
                     ),
                     temperature=0.7,
                 ),
             )
 
-            # append model turn to keep conversation going
+            # ── Capture slot state if monitoring returned critical ────────
+            for content in response.candidates[0].content.parts:
+                if hasattr(content, "function_response"):
+                    resp = content.function_response.response or {}
+                    if resp.get("status") == "critical_scheduling_needed":
+                        self.pending_slots = resp.get("slots", [])
+                        self.selection_state = resp.get("selection_state", "")
+                        break
+            # ─────────────────────────────────────────────────────────────
+
             profile = await get_patient_profile(patient_id)
             full_name = profile.get("name", "there")
-
-            # Use first name only (better UX)
             first_name = full_name.split(" ")[0] if full_name and full_name != "Patient" else "there"
 
             response_text = response.text or ""
 
-            # Enforce name in response
             if first_name.lower() not in response_text.lower():
                 response_text = f"Hi {first_name}, {response_text}"
 
