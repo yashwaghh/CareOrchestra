@@ -146,27 +146,24 @@ class Slot(TypedDict):
 
 async def handle_slot_selection(
     patient_id: str,
-    slot_number: int,
-    slots: List[Slot]   # ✅ FIXED
+    slot_number: int
 ) -> dict:
     """
     Book the appointment slot chosen by the patient.
-    Call this when the patient replies with a slot number (1, 2, or 3)
-    after being presented with urgent appointment options.
+    Call this when the patient replies with a slot number (1, 2, or 3).
 
     Args:
         patient_id: The patient's unique identifier.
         slot_number: The slot number the patient chose (1, 2, or 3).
-        slots: The list of slots previously returned by get_available_slots.
-
-    Returns:
-        Booking confirmation dict with appointment details.
     """
+    scheduling = SchedulingAgent()
+    # Re-fetch slots internally so the AI doesn't have to provide them
+    slots = await scheduling.get_available_slots()
+
     if not slots or slot_number < 1 or slot_number > len(slots):
         return {"status": "error", "error": "Invalid slot selection"}
 
     selected_slot = slots[slot_number - 1]
-    scheduling = SchedulingAgent()
     result = await scheduling.book_slot(
         patient_id=patient_id,
         slot_id=selected_slot["id"],
@@ -433,7 +430,7 @@ class CoordinatorAgent:
             call_symptoms_agent,
             send_to_monitoring_agent,
             escalate_patient,
-             handle_slot_selection, 
+            handle_slot_selection, 
             # TODO: handle_slot_selection (for patient choice),
         ]
         self.history: list[types.Content] = []   # we own the chat history
