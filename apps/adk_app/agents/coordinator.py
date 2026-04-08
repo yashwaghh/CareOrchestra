@@ -63,7 +63,7 @@ async def get_patient_profile(patient_id: str) -> dict:
             last_name,
             chronic_conditions,
             date_of_birth,
-            updated_at
+            created_at
         FROM `{bq_client.project_id}.{bq_client.dataset_id}.patients`
         WHERE patient_id = @patient_id
         LIMIT 1
@@ -96,7 +96,6 @@ async def get_patient_profile(patient_id: str) -> dict:
             "name": full_name or "Patient",
             "age": age,
             "condition": patient.get("chronic_conditions", "Unknown"),
-            "last_visit": str(patient.get("updated_at", "N/A")),
             "target_bp": "130/80"  # can be dynamic later
         }
 
