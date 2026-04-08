@@ -21,14 +21,18 @@ class Slot(TypedDict):
     duration: int
     location: str
 
-
+# UPDATED: This must exactly match the BigQuery table columns in setup.ps1
 class Appointment(TypedDict):
     appointment_id: str
     patient_id: str
+    provider_id: str        # Added
     provider_name: str
+    appointment_type: str   # Added
     scheduled_at: str
     location: str
+    notes: str              # Added
     created_at: str
+    cancelled: bool         # Added
     completed: bool
 
 
@@ -111,16 +115,20 @@ class SchedulingAgent:
             return {"status": "error", "error": "Invalid slot ID"}
 
         # ─────────────────────────────────────────
-        # Create appointment record
+        # Create appointment record (UPDATED TO MATCH SCHEMA)
         # ─────────────────────────────────────────
 
         appointment: Appointment = {
             "appointment_id": f"apt_{uuid.uuid4()}",
             "patient_id": patient_id,
+            "provider_id": slot_id,  
             "provider_name": slot["doctor"],
+            "appointment_type": "Urgent Care",
             "scheduled_at": slot["time"],
             "location": slot["location"],
+            "notes": doctor_note,
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "cancelled": False,
             "completed": False
         }
 
